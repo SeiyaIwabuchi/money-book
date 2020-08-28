@@ -1,364 +1,683 @@
+import 'dart:ffi';
+
 import 'package:flutter/material.dart';
+import 'package:intl/date_symbol_data_local.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 import 'package:intl/intl.dart';
 
-import 'package:money_book/db_helper.dart';
-import 'package:money_book/input_dialog.dart';
-import 'package:money_book/item.dart';
-import 'package:money_book/item_row.dart';
+import 'package:flutter/services.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-void main() {
-  runApp(MyApp());
+class Data{
+  static int nowPageIndex = 0;
+  static bool doneLoad = false;
 }
 
-/// # MyApp クラス
-///
-/// ## アプリ本体
-/// アプリのメイン画面を表示
+class aRecord{
+  int price;
+  String name;
+  DateTime date;
+  aRecord(this.price,this.name,this.date);
+}
+
+List<aRecord> recordsIN = [];  //収入用
+List<aRecord> recordsOUT = []; //支出用
+
+class Record{
+  static int key = 0;
+  static int mokuhyo = 100;
+  static void saveRecords() async {
+    SharedPreferences pref = await SharedPreferences.getInstance();
+    for (int i=0;i<recordsIN.length;i++){
+      await pref.setString("IN." + i.toString() + ".price", recordsIN[i].price.toString());
+      await pref.setString("IN." +i.toString() + ".name", recordsIN[i].name.toString());
+      await pref.setString("IN." +i.toString() + ".date", recordsIN[i].date.toString());
+    }
+      await pref.setString("IN.recordLength", recordsIN.length.toString());
+
+    for (int i=0;i<recordsOUT.length;i++){
+      await pref.setString("OUT." + i.toString() + ".price", recordsOUT[i].price.toString());
+      await pref.setString("OUT." +i.toString() + ".name", recordsOUT[i].name.toString());
+      await pref.setString("OUT." +i.toString() + ".date", recordsOUT[i].date.toString());
+    }
+      await pref.setString("OUT.recordLength", recordsOUT.length.toString());
+  }
+  static void addRecord(int price,String name,DateTime date,String dir){
+    if(dir == "IN"){
+      recordsIN.add(new aRecord(price,name,date));
+    }else if(dir == "OUT"){
+      recordsOUT.add(new aRecord(price,name,date));
+    }
+    saveRecords();
+  }
+  static void roadRecords() async {
+    Data.doneLoad = false;
+    SharedPreferences pref = await SharedPreferences.getInstance();
+    int recordLengthIN = int.parse(pref.get("IN.recordLength"));
+    int recordLengthOUT = int.parse(pref.get("OUT.recordLength"));
+    for(int i=0;i<recordLengthIN;i++){
+      int price = int.parse(pref.get("IN." + (i.toString()) + ".price"));
+      String name = pref.get("IN." + i.toString() + ".name");
+      DateTime date = DateTime.parse(pref.get("IN." + i.toString() + ".date"));
+      recordsIN.add(new aRecord(price,name,date));
+    }
+    for(int i=0;i<recordLengthOUT;i++){
+      int price =  int.parse(pref.get("OUT." + i.toString() + ".price"));
+      String name = pref.get("OUT." + i.toString() + ".name");
+      DateTime date = DateTime.parse(pref.get("OUT." + i.toString() + ".date"));
+      recordsOUT.add(new aRecord(price,name,date));
+    }
+    try{
+      mokuhyo = int.parse(pref.get("mokuhyo"));
+    }on ArgumentError{
+      mokuhyo = 100;
+    }
+    Data.doneLoad = true;
+  }
+  static int getTotal(String dir){
+    int tmp = 0;
+    List<aRecord> tList;
+    if(dir == "OUT"){
+      tList = recordsOUT;
+    }else{
+      tList = recordsIN;
+    }
+    tList.forEach((r) { tmp += r.price; });
+    return tmp;
+  }
+  static void saveMokuhyo(int price) async{
+    SharedPreferences pref = await SharedPreferences.getInstance();
+    await pref.setString("mokuhyo",price.toString());
+    mokuhyo = price;
+  }
+}
+List<String> pageName = [
+  "つかったおかね",
+  "もらったおかね",
+  "もくひょう"
+  ];
+
+final formatter = NumberFormat("#,###");
+
+void main() async {
+  WidgetsFlutterBinding.ensureInitialized();
+  try{
+    await Record.roadRecords();
+  }on ArgumentError{
+
+  }
+  runApp(new MyApp());
+}
+
 class MyApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
-    return MaterialApp(
-      theme: ThemeData(
-        visualDensity: VisualDensity.adaptivePlatformDensity,
+    return new MaterialApp(
+      title: 'Generated App',
+      theme: new ThemeData(
+        primarySwatch: Colors.blue,
+        primaryColor: const Color(0xFF2196f3),
+        accentColor: const Color(0xFF2196f3),
+        canvasColor: const Color(0xFFfafafa),
       ),
-      // MaterialApp で日本語対応をサポート
-      localizationsDelegates: [
-        GlobalMaterialLocalizations.delegate,
-        GlobalWidgetsLocalizations.delegate,
-      ],
-      // ロケールは日本を設定
-      supportedLocales: [
-        const Locale('ja'),
-      ],
-      home: MyHomePage(),
+      home: new HomePage(),
     );
   }
 }
 
-/// # メイン画面ウィジェット
-///
-/// ## お小遣い帳のメイン画面
-/// タブ、項目一覧、月表示を表示
-///
-/// ```
-/// home: MyHomePage()
-/// ```
-class MyHomePage extends StatefulWidget {
-  const MyHomePage({Key key}) : super(key: key);
+class HomePage extends StatefulWidget {
+  HomePage({Key key}) : super(key: key);
   @override
-  _MyHomePageState createState() => new _MyHomePageState();
+  _HomePageState createState() => new _HomePageState();
 }
 
-/// # [MyHomePage] ウィジェットから呼ばれる State(状態) クラス
-///
-/// TabBarView を使用するため SingleTickerProviderStateMixin を継承
-class _MyHomePageState extends State<MyHomePage>
-    with SingleTickerProviderStateMixin {
-  // 表示するタブを保持
-  final List<Tab> tabs = <Tab>[
-    Tab(text: '一覧'),
-    Tab(text: '月表示'),
+class MokuhyouPage extends StatefulWidget {
+  MokuhyouPage({Key key}) : super(key: key);
+  @override
+  _MokuhyouPageState createState() => new _MokuhyouPageState();
+}
+
+class SisyutuPage extends StatefulWidget {
+  SisyutuPage({Key key}) : super(key: key);
+  @override
+  _SisyutuPageState createState() => new _SisyutuPageState();
+}
+
+
+class _HomePageState extends State<HomePage>{
+  int _selectedIndex = 0;
+  static List<Widget> _pageList = [
+    SisyutuPage(),
+    SisyutuPage(),
+    MokuhyouPage(),
   ];
-  TabController _tabController;
 
-  // DB ヘルパーのインスタンスを生成
-  final _dbHelper = DbHelper.instance;
-
-  // 各項目を保持するリスト
-  List<Item> _listViewItems = <Item>[];
-
-  // 月表示用リスト
-  List<Item> _monthViewItems = <Item>[];
-
-  // 月表示の合計金額を保持
-  int _totalPrice = 0;
-
-  // タブのインデックスを保持
-  int _tabIndex = 0;
-
-  // 表示月を保持
-  DateTime _currentDate = DateTime.now();
-
-  // DB から項目を読出して一覧に加える
-  void _loadItems() {
-    _listViewItems = <Item>[]; // リストを初期化
-    _dbHelper.allRows().then((map) {
-      // 読出時に一覧を再描画
-      setState(() {
-        _updateListView(map);
-        _updateMonthView();
-      });
+  void _onItemTapped(int index) {
+    setState(() {
+      _selectedIndex = index;
+      Data.nowPageIndex = index;
     });
   }
+  @override
+  Widget build(BuildContext context) {
+    // TODO: implement build
+    return new Scaffold(
+      appBar: new AppBar(
+        title: new Text(
+          pageName[this._selectedIndex],
+          style: TextStyle(
+            color:Color(0xFF000000)
+          ),
+          ),
+        backgroundColor: Color(0xFFbbefff),
+      ),
+      body: _pageList[_selectedIndex],
+      bottomNavigationBar: new BottomNavigationBar(
+        items: [
+          new BottomNavigationBarItem(
+            icon: const Icon(Icons.arrow_upward),
+            title: new Text(pageName[0]),
+          ),
 
-  // 一覧を更新
-  void _updateListView(List<Map<String, dynamic>> map) {
-    map.forEach((item) {
-      _listViewItems.add(Item.fromMap(item));
-    });
+          new BottomNavigationBarItem(
+            icon: const Icon(Icons.arrow_downward),
+            title: new Text(pageName[1]),
+          ),
+
+          new BottomNavigationBarItem(
+            icon: const Icon(Icons.attach_money),
+            title: new Text(pageName[2]),
+          )
+        ],
+        currentIndex: _selectedIndex,
+        onTap: _onItemTapped,
+        backgroundColor: Color(0xFFe1edfa),
+      ),
+    );
   }
+}
 
-  // 表示月の一覧を更新
-  void _updateMonthView() {
-    // 月初日
-    final firstOfMonth = DateTime(_currentDate.year, _currentDate.month, 1);
-    // 月末日
-    final lastOfMonth = DateTime(_currentDate.year, _currentDate.month + 1, 0);
 
-    // 表示月の一覧を初期化
-    _monthViewItems = <Item>[];
-    // 月表示の合計金額を保持する変数
-    _totalPrice = 0;
+Widget getRowView(String name, int value){
+  return Container(
+    color: Color(0xFF000000).withOpacity(1).withBlue((255*getClNum(value/Record.getTotal("OUT"))).floor()).withGreen(0x00).withRed((255*getClNum(value/Record.getTotal("OUT") - 255).floor())).withOpacity(0.3),
+    child:
+      new Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        mainAxisSize: MainAxisSize.max,
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: <Widget>[
+          new Padding(
+            child:
+            new Text(
+              name,
+              style: new TextStyle(fontSize:20.0,
+                  color: const Color(0xFF000000),
+                  fontWeight: FontWeight.w200,
+                  fontFamily: "Roboto"),
+            ),
 
-    // 表示月に該当する日付で項目を絞り込む
-    _monthViewItems = _listViewItems.where((item) {
-      final date = DateTime.parse(item.date);
+            padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 24.0),
+          ),
 
-      // 表示月の月初日 < dete < 表示月の月末日 で絞込
-      return date.compareTo(firstOfMonth) >= 0 &&
-          date.compareTo(lastOfMonth) < 0;
-    }).toList();
+          new Padding(
+            child:
+            new Text(
+              "￥" + formatter.format(value),
+              style: new TextStyle(fontSize:20.0,
+                  color: const Color(0xFF000000),
+                  fontWeight: FontWeight.w200,
+                  fontFamily: "Roboto"),
+            ),
 
-    // 表示月の合計金額を算出
-    _monthViewItems.forEach((item) {
-      _totalPrice += item.price;
-    });
-  }
+            padding: const EdgeInsets.fromLTRB(24.0, 0.0, 24.0, 24.0),
+          )
+        ]
 
-  // ウィジェットが作成時に呼ばれるメソッド
+    )
+  );
+}
+Widget getDateRowView(DateTime date){
+  debugPrint(date.toString());
+  return new Row(
+      mainAxisAlignment: MainAxisAlignment.center,
+      mainAxisSize: MainAxisSize.max,
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: <Widget>[
+        new Padding(
+          child:
+          new Text(
+            date.month.toString() + "月" + date.day.toString() + "日",
+            style: new TextStyle(fontSize:18.0,
+                color: const Color(0xFF000000),
+                fontWeight: FontWeight.w200,
+                fontFamily: "Roboto"),
+          ),
+          padding: const EdgeInsets.all(10.0),
+        )
+      ]
+  );
+}
+
+
+class _SisyutuPageState extends State<SisyutuPage>{
+  String name = "";
+  int price = 0;
+  DateTime date = DateTime.now();
+  TextEditingController _textEditingController;
   @override
   void initState() {
     super.initState();
-    // TabController のインスタンスを生成
-    _tabController = TabController(vsync: this, length: tabs.length);
-
-    // DB から既存の項目を読出
-    _loadItems();
+    _textEditingController = new TextEditingController(text: ''); // <- こんな感じ
   }
-
-  // ウィジェットが破棄時に呼ばれるメソッド
-  @override
-  void dispose() {
-    super.dispose();
-    _tabController.dispose();
-  }
-
-  // ウィジェットを構築するメソッド
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      // AppBar を設定
-      appBar: AppBar(
-          // タブの UI を実装
-          flexibleSpace: Padding(
-              // ステータスバーに重ならないようにパディングを入れて位置を調整
-              padding: EdgeInsets.only(top: 27),
-              child: Column(children: <Widget>[
-                Container(
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      // 一覧ボタン
-                      FlatButton(
-                        // 選択された場合はボタンの背景色を白に変更する
-                        color: _tabIndex == 0 ? Colors.white : Colors.blue,
-                        // タブ [一覧] 押下時処理
-                        onPressed: () {
-                          _tabController.animateTo(0);
-                          // インデックスを設定して再描画
-                          setState(() {
-                            _tabIndex = 0;
-                          });
-                        },
-                        // ボタンに 「一覧」を表示
-                        child: Text(tabs[0].text),
-                      ),
-                      // 月表示ボタン
-                      FlatButton(
-                        // 選択された場合はボタンの背景色を白に変更する
-                        color: _tabIndex == 1 ? Colors.white : Colors.blue,
-                        // タブ [月表示] 押下時処理
-                        onPressed: () {
-                          _tabController.animateTo(1);
-                          // インデックスを設定して再描画
-                          setState(() {
-                            _tabIndex = 1;
-                          });
-                        },
-                        // ボタンに 「月表示」を表示
-                        child: Text(tabs[1].text),
-                      )
-                    ],
-                  ),
-                ),
-              ]))),
-      // [一覧][月表示] の UI を実装
-      body: TabBarView(
-        controller: _tabController,
-        // タブのみでスクロールするように設定
-        physics: const NeverScrollableScrollPhysics(),
-        children: tabs.map((tab) {
-          // 一覧表示の UI を配置
-          if (tabs[0] == tab) {
-            // 一覧表示
-            return ListView.builder(itemBuilder: (context, index) {
-              if (index >= _listViewItems.length) {
-                return null;
-              }
+    final Size size = MediaQuery.of(context).size;
+    int pageIndex = Data.nowPageIndex;
+    // TODO: implement build
+    return new Scaffold(
+      body:
+       new Stack(
+           children: <Widget>[
+             new Image.asset('images/flutter背景でかい.png',
+               fit:BoxFit.fitHeight,
+             ),
+              new Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                mainAxisSize: MainAxisSize.max,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: <Widget>[
+                        new Row(
+                            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                            mainAxisSize: MainAxisSize.max,
+                            crossAxisAlignment: CrossAxisAlignment.center,
+                            children: <Widget>[
+                              new Padding(
+                                child:
+                                new Text(
+                                  "ごうけい",
+                                  style: new TextStyle(fontSize:20.0,
+                                      color: const Color(0xFF000000),
+                                      fontWeight: FontWeight.w200,
+                                      fontFamily: "Roboto"),
+                                ),
 
-              return Padding(
-                padding: EdgeInsets.all(1.0),
-                // 項目表示行を配置
-                child: ItemRow(
-                  item: _listViewItems[index],
-                  // 削除ボタン押下時の処理
-                  onDeleteTapped: (id) {
-                    setState(() {
-                      // 選択した項目を削除
-                      _dbHelper.delete(id);
-                      _loadItems();
-                    });
-                  },
-                  // 項目行の押下時の処理
-                  onItemEdited: (item) {
-                    setState(() {
-                      // 選択した項目を更新
-                      _dbHelper.update(item.id, item.toMap());
-                      _loadItems();
-                    });
-                  },
-                ),
-              );
-            });
-          } else {
-            // 月表示「< 2020年 08月 >」の UI を実装
-            return Column(
+                                padding: const EdgeInsets.fromLTRB(24.0, 24.0, 24.0, 24.0),
+                              ),
+
+                              new Padding(
+                                child:
+                                new Text(
+                                  "￥" + formatter.format(Record.getTotal(Data.nowPageIndex==0?"OUT":"IN")),
+                                  style: new TextStyle(fontSize:20.0,
+                                      color: const Color(0xFF000000),
+                                      fontWeight: FontWeight.w200,
+                                      fontFamily: "Roboto"),
+                                ),
+
+                                padding: const EdgeInsets.fromLTRB(24.0, 24.0, 24.0, 24.0),
+                              )
+                            ]
+
+                        ),
+                        getList(),
+                        new SizedBox(
+                          width: size.width-100,
+                          height: size.height/14,
+                          child: new RaisedButton(
+                            child: Text(
+                              "にゅうりょく",
+                              style: new TextStyle(
+                              fontSize: 20.0
+                              ),
+                            ),
+                            onPressed: nyuryoku,
+                            shape: StadiumBorder(),
+                            color: Color(0xFFe1edfa),
+                    ),
+                  ),
+                ]
+            ),
+        ],
+           fit: StackFit.expand
+       )
+    );
+  }
+  void nyuryoku(){
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+            return SimpleDialog(
+              title: Text('にゅうりょく'),
               children: <Widget>[
-                Padding(
-                  padding: EdgeInsets.all(20.0),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: <Widget>[
-                      // 左矢印ボタンを配置
-                      IconButton(
-                        onPressed: () {
-                          // 押下時に表示する月を前の月に変更
-                          setState(() {
-                            final newDate = DateTime(_currentDate.year,
-                                _currentDate.month - 1, _currentDate.day);
-                            _currentDate = newDate;
-                            _updateMonthView();
-                          });
-                        },
-                        // 左矢印の画像を設定
-                        icon: Image.asset(
-                          'images/left_arrow.png',
-                          color: Colors.black,
-                          width: 20,
-                          height: 20,
+                new Column(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.max,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    new Padding(
+                      padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 0.0),
+                      child: new Text("ひづけ"),
+                    ),
+                    new Padding(
+                      padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                      child: new TextField(
+                      onTap: () => selectDate(context),
+                      controller: _textEditingController,
+                      )
+                    ),
+                    new Padding(
+                      padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 0.0),
+                      child: new Text("ことがら"),
+                    ),
+                    new Padding(
+                      padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                      child: new TextField(
+                        maxLines:1 ,
+                        onChanged: handleTextName,
+                      )
+                    ),
+                    new Padding(
+                      padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 0.0),
+                      child: new Text("きんがく"),
+                    ),
+                    new Padding(
+                      padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                      child: new TextField(
+                        maxLines:1 ,
+                        inputFormatters: <TextInputFormatter> [
+                          WhitelistingTextInputFormatter.digitsOnly,
+                        ],
+                        onChanged: handleTextPrice,
+                      )
+                    ),
+                    new Padding(
+                      padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                      child: new RaisedButton(
+                        child: new Text(
+                          "OK"
                         ),
-                      ),
-                      // 表示月を配置
-                      Text(DateFormat('yyyy年 MM月').format(_currentDate),
-                          style: TextStyle(
-                            color: Colors.blueAccent,
-                            fontSize: 20,
-                          )),
-                      // 右矢印ボタンを配置
-                      IconButton(
-                        onPressed: () {
-                          // 押下時に表示する月を次の月に変更
-                          setState(() {
-                            final newDate = DateTime(_currentDate.year,
-                                _currentDate.month + 1, _currentDate.day);
-                            _currentDate = newDate;
-                            _updateMonthView();
-                          });
-                        },
-                        // 右矢印の画像を設定
-                        icon: Image.asset(
-                          'images/right_arrow.png',
-                          color: Colors.black,
-                          width: 20,
-                          height: 20,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                // 合計金額の UI を実装
-                Padding(
-                  padding: EdgeInsets.all(20.0),
-                  child: Text(
-                      // 合計金額を表示
-                      '¥${_totalPrice.toString()}',
-                      style: TextStyle(
-                        color: Colors.blueAccent,
-                        fontSize: 20,
-                      )),
-                ),
-                // 月ごとの一覧の UI を実装
-                Flexible(
-                  child: ListView.builder(itemBuilder: (context, index) {
-                    if (index >= _monthViewItems.length) {
-                      return null;
-                    }
-
-                    return Padding(
-                      padding: EdgeInsets.all(1.0),
-                      child: ItemRow(
-                        item: _monthViewItems[index],
-                        // 削除ボタン押下時の処理
-                        onDeleteTapped: (id) {
-                          setState(() {
-                            // 選択した項目を削除
-                            _dbHelper.delete(id);
-                            _loadItems();
-                          });
-                        },
-                        // 項目行の押下時の処理
-                        onItemEdited: (item) {
-                          setState(() {
-                            // 選択して項目を更新
-                            _dbHelper.update(item.id, item.toMap());
-                            _loadItems();
-                          });
-                        },
-                      ),
-                    );
-                  }),
-                ),
+                      onPressed: nyurokuOK,
+                      )
+                    )
+                  ]
+                )
               ],
             );
-          }
-        }).toList(),
-      ),
-      // フローティングボタン(新規項目追加) の UI を実装
-      floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          // 押下時に項目入力ダイアログを表示
-          showDialog(
-              barrierDismissible: false, // ダイアログの背景を押しても閉じないように設定
-              context: context,
-              builder: (_) {
-                // 表示するダイアログを設定
-                return InputDialog();
-              }).then((item) {
-            // 新規項目追加時に再描画
-            setState(() {
-              if (item != null) {
-                // 新規項目を DB に保存
-                _dbHelper.insert(item.toMap());
+          },
+    );
+  }
+  void nyurokuOK(){
+    if(price != null && name != null && date != null){
+      setState(() {
+        _textEditingController.text = "";
+      });
+      String dir = Data.nowPageIndex == 0 ? "OUT" : "IN";
+      Record.addRecord(price, name, date, dir);
+      price = null;
+      name = null;
+      date = null;
+      Navigator.pop(context);
+    }
+  }
+  void handleTextName(String e) => this.name = e;
+  void handleTextPrice(String e) => this.price = int.parse(e);
+  void handleDate(DateTime e) => this.date = e;
 
-                // 一覧を更新
-                _loadItems();
-              }
-            });
-          });
-        },
-        child: Icon(Icons.add),
-      ),
+  Future<void> selectDate(BuildContext context) async {
+    final DateTime selected = await showDatePicker(
+      context: context,
+      initialDate: DateTime.now(),
+      firstDate: DateTime(2015),
+      lastDate: DateTime.now(),
+    );
+    if (selected != null) {
+      setState(() {
+        date = selected;
+        _textEditingController.text = date.month.toString() + "月" + date.day.toString() + "日";
+      });
+    }
+  }
+  Widget getList(){
+    List<Widget> _myList = [];
+    List<aRecord> tlist = Data.nowPageIndex == 0 ? recordsOUT : recordsIN;
+    DateTime tDate;
+    try{
+      tDate = tlist[0].date;
+      _myList.add(getDateRowView(tDate));
+    }on RangeError{
+      tDate = DateTime.now();
+    }
+    for(aRecord r in tlist){
+      if(tDate.difference(r.date) != Duration()){
+        _myList.add(getDateRowView(r.date));
+        tDate = r.date;
+      }
+      _myList.add(getRowView(r.name,r.price));
+    }
+    return Container(
+      color: Color(0x00FFFFFFFF).withOpacity(0.5),
+      height:410,
+      child:
+          Scrollbar(
+            child:
+              SingleChildScrollView(
+                child:
+                new Column(
+                    mainAxisAlignment: MainAxisAlignment.start,
+                    mainAxisSize: MainAxisSize.max,
+                    crossAxisAlignment: CrossAxisAlignment.center,
+                    children: _myList
+                )
+                ,
+              )
+          )
     );
   }
 }
+
+class _MokuhyouPageState extends State<MokuhyouPage> {
+  int InTotal = Record.getTotal("IN");
+  int OutTotal = Record.getTotal("OUT");
+  int price;
+  @override
+  Widget build(BuildContext context) {
+    final Size size = MediaQuery.of(context).size;
+    //debugPrint((0xFF000000 + ((((InTotal - OutTotal)/Record.mokuhyo)*0xFF).floor() << 0x0f)).toRadixString(16));
+    //debugPrint((((((InTotal - OutTotal)/Record.mokuhyo)*0xFF).floor() << 0x10)).toRadixString(16));
+    debugPrint(((InTotal - OutTotal)/Record.mokuhyo).toString());
+    return new Scaffold(
+      body:
+      new Stack(
+          children: <Widget>[
+            new Image.asset('images/flutter背景でかい.png',
+                fit:BoxFit.fitHeight,
+            ),
+            new Column(
+                mainAxisAlignment: MainAxisAlignment.start,
+                mainAxisSize: MainAxisSize.max,
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: <Widget>[
+                  new Padding(
+                    child:
+                    new Stack(
+                      children: <Widget>[
+                        new Image.asset(
+                          'images/simple_present_red下地.png',
+                          fit:BoxFit.fill,
+                          width: (size.height/2)-(size.width/4),
+                          height: size.height/2-(size.width/4),
+                        ),
+                        new Image.asset(
+                          'images/simple_present_red中地.png',
+                          fit:BoxFit.fill,
+                          width: (size.height/2)-(size.width/4),
+                          height: 250 - (((InTotal - OutTotal)/Record.mokuhyo)*250),
+                        ),
+                        new Image.asset(
+                          'images/simple_present_red上地.png',
+                          fit:BoxFit.fill,
+                          width: (size.height/2)-(size.width/4),
+                          height: size.height/2-(size.width/4),
+                        ),
+                      ],
+                    ),
+                    padding: const EdgeInsets.all(24.0),
+                  ),
+
+                  new Padding(
+                    child:
+                    new Text(
+                      "たまったおかね",
+                      style: new TextStyle(fontSize:25.0,
+                          fontWeight: FontWeight.w200,
+                          fontFamily: "Roboto"),
+                    ),
+
+                    padding: const EdgeInsets.fromLTRB(24.0, 19.0, 24.0, 4.0),
+                  ),
+
+                  new Padding(
+                    child:
+                    new Text(
+                      "￥" + formatter.format(InTotal - OutTotal),
+                      style: new TextStyle(fontSize:25.0,
+                          //const Color(0xFF000000 + ((((InTotal - OutTotal)/Record.mokuhyo)*0xFF) << 0x10) + 0xFF - (((InTotal - OutTotal)/Record.mokuhyo)*0xFF))
+                          color: Color(0xFF000000).withOpacity(1).withBlue((255*getClNum((InTotal - OutTotal)/Record.mokuhyo) - 255).floor()).withGreen(0x00).withRed((255*getClNum((InTotal - OutTotal)/Record.mokuhyo)).floor()),
+                          fontWeight: FontWeight.w900,
+                          fontFamily: "Roboto"),
+                    ),
+
+                    padding: const EdgeInsets.fromLTRB(24.0, 4.0, 24.0, 4.0),
+                  ),
+
+                  new Padding(
+                    child:
+                    new Text(
+                      "ひつようなおかね",
+                      style: new TextStyle(fontSize:25.0,
+                          color: const Color(0xFF000000),
+                          fontWeight: FontWeight.w200,
+                          fontFamily: "Roboto"),
+                    ),
+
+                    padding: const EdgeInsets.fromLTRB(24.0, 4.0, 24.0, 4.0),
+                  ),
+                  new Stack(
+                    children:<Widget>[
+                        new FlatButton(
+                        child: 
+                        new Padding(
+                        child:
+                        new Text(
+                          '￥' + formatter.format(Record.mokuhyo),
+                          style: new TextStyle(fontSize:25.0,
+                              color: const Color(0xFF000000),
+                              fontWeight: FontWeight.w200,
+                              fontFamily: "Roboto"),
+                          ),
+
+                          padding: const EdgeInsets.fromLTRB(24.0, 4.0, 24.0, 0.0),
+                        ),
+                        onLongPress: nyuryoku,
+                        highlightColor: Color(0x0).withOpacity(0),
+                      ),
+                    ]
+                  ),
+                ]
+
+            ),
+            ((InTotal - OutTotal)/Record.mokuhyo) >= 1 ? goalDialog() : new Padding(padding: EdgeInsets.fromLTRB(0,0,0,0))
+          ],
+          fit: StackFit.expand
+      ),
+    );
+  }
+  void nyuryoku(){
+    showDialog(
+      context: context,
+      builder: (BuildContext context) {
+            return SimpleDialog(
+              title: Text('にゅうりょく'),
+              children: <Widget>[
+                new Column(
+                  mainAxisAlignment: MainAxisAlignment.start,
+                  mainAxisSize: MainAxisSize.max,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    new Padding(
+                      padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 0.0),
+                      child: new Text("ひつようなおかね"),
+                    ),
+                    new Padding(
+                      padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                      child: new TextField(
+                        maxLines:1 ,
+                        inputFormatters: <TextInputFormatter> [
+                          WhitelistingTextInputFormatter.digitsOnly,
+                        ],
+                        onChanged: handleTextPrice,
+                      )
+                    ),
+                    new Padding(
+                      padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                      child: new RaisedButton(
+                        child: new Text(
+                          "OK"
+                        ),
+                      onPressed: nyurokuOK,
+                      )
+                    )
+                  ]
+                )
+              ],
+            );
+          },
+    );
+  }
+  void nyurokuOK(){
+    setState(() {
+      if(price != null){
+        Record.saveMokuhyo(price);
+        price = null;
+        Navigator.pop(context);
+      }
+    });
+  }
+  void handleTextPrice(String e) => this.price = int.parse(e);
+
+  Widget goalDialog(){
+    Record.saveMokuhyo(Record.mokuhyo*2);
+    return SimpleDialog(
+      title: Text('☆もくひょうたっせい☆'),
+      children: <Widget>[
+        new Column(
+          mainAxisAlignment: MainAxisAlignment.start,
+          mainAxisSize: MainAxisSize.max,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            new Padding(
+              padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 0.0),
+              child: new Text("もくひょうたっせいしました！おめでとうございます！"),
+            ),
+            new Padding(
+              padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+              child: new RaisedButton(
+                child: new Text(
+                  "OK"
+                ),
+              onPressed: () => Navigator.pop(context)
+              )
+            )
+          ]
+        )
+      ],
+    );
+  }
+}
+
+  double getClNum(double value) {
+    if(value > 1) return 1;
+    else if(value < 0) return 0;
+    else return value;
+  }
