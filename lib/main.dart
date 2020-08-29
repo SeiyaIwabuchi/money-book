@@ -1,8 +1,6 @@
-import 'dart:ffi';
 
 import 'package:flutter/material.dart';
-import 'package:intl/date_symbol_data_local.dart';
-import 'package:flutter_localizations/flutter_localizations.dart';
+import 'package:flutter/rendering.dart';
 import 'package:intl/intl.dart';
 
 import 'package:flutter/services.dart';
@@ -126,9 +124,12 @@ class MyApp extends StatelessWidget {
 }
 
 class HomePage extends StatefulWidget {
-  HomePage({Key key}) : super(key: key);
+  HomePage({Key key}) : super(key: key); //親クラス(StatefulWidget)のコンストラクタを呼び出し、継承
   @override
-  _HomePageState createState() => new _HomePageState();
+  //_HomePageState createState() => new _HomePageState();
+  _HomePageState createState(){
+    return new _HomePageState();
+  }
 }
 
 class MokuhyouPage extends StatefulWidget {
@@ -141,6 +142,12 @@ class SisyutuPage extends StatefulWidget {
   SisyutuPage({Key key}) : super(key: key);
   @override
   _SisyutuPageState createState() => new _SisyutuPageState();
+}
+
+class GoalDialog extends StatefulWidget{
+  GoalDialog({Key key}) : super(key : key);
+  @override
+  _GoalDialogState createState() => new _GoalDialogState();
 }
 
 
@@ -476,16 +483,17 @@ class _SisyutuPageState extends State<SisyutuPage>{
   }
 }
 
-class _MokuhyouPageState extends State<MokuhyouPage> {
+class _MokuhyouPageState extends State<MokuhyouPage>{
   int InTotal = Record.getTotal("IN");
   int OutTotal = Record.getTotal("OUT");
   int price;
+
   @override
   Widget build(BuildContext context) {
     final Size size = MediaQuery.of(context).size;
     //debugPrint((0xFF000000 + ((((InTotal - OutTotal)/Record.mokuhyo)*0xFF).floor() << 0x0f)).toRadixString(16));
     //debugPrint((((((InTotal - OutTotal)/Record.mokuhyo)*0xFF).floor() << 0x10)).toRadixString(16));
-    debugPrint(((InTotal - OutTotal)/Record.mokuhyo).toString());
+    debugPrint((Record.getTotal("IN") - Record.getTotal("OUT") >= Record.mokuhyo).toString());
     return new Scaffold(
       body:
       new Stack(
@@ -585,9 +593,8 @@ class _MokuhyouPageState extends State<MokuhyouPage> {
                     ]
                   ),
                 ]
-
             ),
-            ((InTotal - OutTotal)/Record.mokuhyo) >= 1 ? goalDialog() : new Padding(padding: EdgeInsets.fromLTRB(0,0,0,0))
+            new GoalDialog(),
           ],
           fit: StackFit.expand
       ),
@@ -646,34 +653,40 @@ class _MokuhyouPageState extends State<MokuhyouPage> {
   }
   void handleTextPrice(String e) => this.price = int.parse(e);
 
-  Widget goalDialog(){
+  /*void goalDialog(){
     Record.saveMokuhyo(Record.mokuhyo*2);
-    return SimpleDialog(
-      title: Text('☆もくひょうたっせい☆'),
-      children: <Widget>[
-        new Column(
-          mainAxisAlignment: MainAxisAlignment.start,
-          mainAxisSize: MainAxisSize.max,
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            new Padding(
-              padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 0.0),
-              child: new Text("もくひょうたっせいしました！おめでとうございます！"),
-            ),
-            new Padding(
-              padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
-              child: new RaisedButton(
-                child: new Text(
-                  "OK"
-                ),
-              onPressed: () => Navigator.pop(context)
+    showDialog(
+      context: context,
+      builder: (context){
+        return SimpleDialog(
+        title: Text('☆もくひょうたっせい☆'),
+        children: <Widget>[
+          new Column(
+            mainAxisAlignment: MainAxisAlignment.start,
+            mainAxisSize: MainAxisSize.max,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              new Padding(
+                padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 0.0),
+                child: new Text("もくひょうたっせいしました！おめでとうございます！"),
+              ),
+              new Padding(
+                padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                child: new RaisedButton(
+                  child: new Text(
+                    "OK"
+                  ),
+                onPressed: () => Navigator.pop(context)
+                )
               )
-            )
-          ]
-        )
-      ],
+            ]
+          )
+        ],
+      );
+      }
     );
-  }
+  }*/
+
 }
 
   double getClNum(double value) {
@@ -681,3 +694,43 @@ class _MokuhyouPageState extends State<MokuhyouPage> {
     else if(value < 0) return 0;
     else return value;
   }
+
+class _GoalDialogState extends State<GoalDialog> {
+  @override
+  Widget build(BuildContext context) {
+    if (Record.getTotal("IN") - Record.getTotal("OUT") >= Record.mokuhyo){
+      Record.saveMokuhyo(Record.mokuhyo*2);
+      return new SimpleDialog(
+        title: Text('☆もくひょうたっせい☆'),
+        children: <Widget>[
+          new Column(
+            mainAxisAlignment: MainAxisAlignment.start,
+            mainAxisSize: MainAxisSize.max,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              new Padding(
+                padding: const EdgeInsets.fromLTRB(24.0, 0, 24.0, 0.0),
+                child: new Text("もくひょうたっせいしました！\nおめでとうございます！\n次の目標額を設定してみましょう！"),
+              ),
+              new Padding(
+                padding: EdgeInsets.fromLTRB(24.0, 0, 24.0, 24.0),
+                child: new RaisedButton(
+                  child: new Text(
+                    "OK"
+                  ),
+                onPressed: (){
+                  setState(() {
+                    Data.nowPageIndex = 2;
+                  });
+                }
+                )
+              )
+            ]
+          )
+        ],
+      );
+    }else{
+      return new Padding(padding: EdgeInsets.all(0),);
+    }
+  }
+}
